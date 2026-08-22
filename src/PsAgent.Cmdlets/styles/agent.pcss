@@ -1,0 +1,48 @@
+/* agent — the transcript sheet for Invoke-Agent and Invoke-Acp.
+ *
+ * The tree is the same shape Show-Styled builds: Surface -> (Row | Detail)*, where an expanded
+ * Row is followed by a Detail container of DetailLine leaves. Rows carry a `class` projected from
+ * AgentEvent.Class, so one sheet colours both the local agent and any ACP agent.
+ *
+ * Colour is a second channel here, never the only one: every row also carries a glyph from
+ * AgentEvent.Glyph, so the transcript still reads under NO_COLOR or in a pipe.
+ */
+
+Row { color: white }
+
+/* Who is speaking. The operator's own lines stay bright so they anchor the scrollback; the
+ * model's reasoning is deliberately dim — it is context, not the answer. */
+.user      { color: brightwhite; font-weight: bold }
+.assistant { color: white }
+.thought   { color: gray }
+.plan      { color: brightmagenta }
+
+/* Tool rows are the ones a reader scans for, so they get the one saturated colour in the sheet,
+ * and their outcome is encoded in the colour rather than only in the text. */
+.tool          { color: brightblue }
+.tool.running  { color: brightyellow }
+.tool.ok       { color: brightgreen }
+.tool.error    { color: brightred;    font-weight: bold }
+
+.error { color: brightred;    font-weight: bold }
+.warn  { color: brightyellow }
+.ok    { color: brightgreen }
+.muted { color: gray }
+
+/* The expanded body: full message text, tool arguments, command output. */
+Detail             { color: gray }
+Detail .key        { color: cyan }
+:expanded > Detail { color: white }
+
+/* Focus wins over every kind colour — the cursor has to be unmistakable. */
+:focused { color: black; background: brightcyan }
+
+Surface {
+    command: "navigate-down"  when "key.ArrowDown";
+    command: "navigate-up"    when "key.ArrowUp";
+    command: "navigate-down"  when "key.j";
+    command: "navigate-up"    when "key.k";
+    command: "toggle-expand"  when "key.Enter";
+    command: "prompt"         when "key.i";
+    command: "interrupt"      when "key.Escape";
+}

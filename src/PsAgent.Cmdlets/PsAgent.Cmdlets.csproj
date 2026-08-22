@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Binary pwsh module: Invoke-Agent (the minimal coding agent) and Invoke-Acp
+    (the Agent Client Protocol client). Multi-targets net8.0 (PowerShell 7.4 JIT
+    host) and net10.0 to match PsBash.Cmdlets — a single-TFM reference against a
+    multi-TFM project drags a mismatched copy into the host runspace and wedges
+    Import-Module (the failure documented in PsBash.Cmdlets.csproj).
+    AOT is off: these cmdlets use reflection-heavy PSObject + System.Text.Json paths.
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PublishAot>false</PublishAot>
+    <IsPackable>false</IsPackable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+
+    <!-- Strata comes from ../strata/local-feed until it ships to nuget.org — the same
+         auto-detecting gate ps-bash uses, deliberately duplicated rather than shared so
+         this repo builds standalone. The feed packs UNPREFIXED Strata.* ids (NOT the
+         frozen StandardBeagle.Strata.* on nuget.org), and pack-local.sh lets MinVer stamp
+         the version from strata's git tags — so the version is auto-detected from the
+         newest Strata.Css nupkg rather than hand-pinned, which would silently drift on
+         every strata bump. Override with -p:StrataVersion=X / -p:UseStrata=true|false. -->
+    <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\strata\local-feed'))</StrataLocalFeed>
+    <_StrataFeedCssNupkg Condition="'$(StrataVersion)' == '' and Exists('$(StrataLocalFeed)')">$([System.IO.Directory]::GetFiles('$(StrataLocalFeed)', 'Strata.Css.*.nupkg'))</_StrataFeedCssNupkg>
+    <StrataVersion Condition="'$(StrataVersion)' == '' and '$(_StrataFeedCssNupkg)' != ''">$([System.Text.RegularExpressions.Regex]::Match('$(_StrataFeedCssNupkg)', '.*Strata\.Css\.(.+?)\.nupkg').Groups[1].Value)</StrataVersion>
+    <UseStrata Condition="'$(UseStrata)' == '' and Exists('$(StrataLocalFeed)')">true</UseStrata>
+    <UseStrata Condition="'$(UseStrata)' == ''">false</UseStrata>
+    <RestoreAdditionalProjectSources Condition="'$(UseStrata)' == 'true'">$(RestoreAdditionalProjectSources);$(StrataLocalFeed)</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PsAgent.Cmdlets.Tests" />
+  </ItemGroup>
+
+  <!-- Show-Styled and the Strata render loop it demonstrates are the UI substrate for both
+       cmdlets. The reference is what makes `Show-Styled` resolvable in-process and gives us
+       StyledInteractiveSession's public helpers (NodeText / KindOf / ResolveCss); the styled
+       cmdlets in that assembly only compile when Strata is present, hence the same gate. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\ps-bash\src\PsBash.Cmdlets\PsBash.Cmdlets.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management.Automation" Version="7.4.*">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Anthropic" Version="12.*" />
+  </ItemGroup>
+
+  <!-- The agent surface renders through Strata directly (its own node type + stylesheet), the
+       same Spectre projection Show-Styled drives. -->
+  <ItemGroup>
+    <PackageReference Include="Strata.Css" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Core" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Properties.Styling" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Render.Spectre" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Layout.Yoga" Version="$(StrataVersion)" />
+    <PackageReference Include="Strata.Interaction" Version="$(StrataVersion)" />
+    <EmbeddedResource Include="styles\*.pcss" />
+  </ItemGroup>
+
+  <!-- Strata is not optional here the way it is in ps-bash: Show-Styled, the stylesheet, and the
+       transcript viewer ARE this module's UI, so a feed-less build would produce cmdlets with
+       nothing to render into. Fail with the fix rather than a wall of CS0246s. -->
+  <Target Name="RequireStrataFeed" BeforeTargets="PrepareForBuild" Condition="'$(UseStrata)' != 'true'">
+    <Error Text="Strata not found at $(StrataLocalFeed). Run ../strata/scripts/pack-local.sh to populate the local feed, or pass -p:StrataLocalFeed=&lt;path&gt;." />
+  </Target>
+
+  <ItemGroup>
+    <None Include="PsAgent.psd1" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+
+</Project>

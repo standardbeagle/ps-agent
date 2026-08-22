@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net10.0 only, for the reason PsBash.Cmdlets.Tests documents: a user's pwsh that has the
+         module imported holds an exclusive open on the net8.0 output, and a test build through
+         that TFM then fails with MSB3027. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+
+    <!-- Strata flows in transitively through the ProjectReference, so this project needs the
+         local feed as a restore source too. -->
+    <StrataLocalFeed Condition="'$(StrataLocalFeed)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\strata\local-feed'))</StrataLocalFeed>
+    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);$(StrataLocalFeed)</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
+    <PackageReference Include="xunit" Version="2.*" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.*">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="System.Management.Automation" Version="7.4.*" />
+    <!-- So "node is not installed" shows as a SKIP, not a silent pass. An integration test that
+         quietly returns when its fixture is unavailable is indistinguishable from one that ran. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.61" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PsAgent.Cmdlets\PsAgent.Cmdlets.csproj" />
+  </ItemGroup>
+
+  <!-- The stub ACP agent AcpClientIntegrationTests spawns. Copied beside the test assembly so it
+       is found via AppContext.BaseDirectory rather than a path relative to the source tree. -->
+  <ItemGroup>
+    <None Include="fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PsAgent.Cmdlets.Tests/PsAgent.Cmdlets.Tests.csproj" />
+    <Project Path="src/PsAgent.Cmdlets/PsAgent.Cmdlets.csproj" />
+  </Folder>
+  <Project Path="../ps-bash/src/PsBash.Cmdlets/PsBash.Cmdlets.csproj" />
+  <Project Path="../ps-bash/src/PsBash.Transpiler/PsBash.Transpiler.csproj" />
+</Solution>
