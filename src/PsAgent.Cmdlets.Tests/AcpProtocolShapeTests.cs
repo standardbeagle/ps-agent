@@ -120,6 +120,19 @@ public sealed class AcpProtocolShapeTests
         Assert.Equal("npx", AcpLaunch.Resolve("Gemini", null).Command);
     }
 
+    /// <summary>
+    /// opencode is the odd one out: ACP is a subcommand of its own binary, not an npx package.
+    /// Resolving it to a bare "opencode" would launch the interactive TUI instead of the server.
+    /// </summary>
+    [Fact]
+    public void Opencode_resolves_to_its_acp_subcommand()
+    {
+        var launch = AcpLaunch.Resolve("opencode", null);
+
+        Assert.Equal("opencode", launch.Command);
+        Assert.Equal(["acp"], launch.Arguments);
+    }
+
     [Fact]
     public void Extra_arguments_append_to_a_presets_own()
     {

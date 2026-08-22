@@ -128,3 +128,24 @@ and path confinement — with no ACP agent installed, no network, and no API key
 
 **Extend the stub when adding protocol behaviour.** An assertion against a real subprocess is worth
 more than another unit test of a shape you also wrote.
+
+### Against a real agent
+
+The stub proves the protocol; a real agent proves the assumptions. `opencode acp` is the cheapest
+one to run (no npx download, no separate package):
+
+```powershell
+Invoke-Acp "Read hello.txt and tell me the magic word." -Agent opencode -NoUi -AutoApprove
+```
+
+Verified against **opencode 1.18.18**: handshake, session, streamed thought and message chunks,
+tool calls reported and completed, a real file write landing on disk, and `end_turn`.
+
+Two things that run showed, both worth keeping in mind:
+
+- **Agent-supplied text is not sanitised, and should not be.** opencode sends tool-call titles with
+  the drive letter stripped (`Users\andyb\…`). That is its text; rendering it verbatim is correct,
+  and "fixing" it in the client would be guessing at another program's intent.
+- **The permission path is not exercised by every agent.** opencode did not send
+  `session/request_permission` at all during those runs, so that branch remains covered only by the
+  stub. Do not assume a real-agent run has tested it.

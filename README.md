@@ -53,8 +53,24 @@ mean unauthenticated.
 | `claude` | `npx -y @zed-industries/claude-code-acp` |
 | `gemini` | `npx -y @google/gemini-cli --experimental-acp` |
 | `codex` | `npx -y @zed-industries/codex-acp` |
+| `opencode` | `opencode acp` — ACP is a subcommand of its own binary, not an npx package |
 
-Anything else is treated as an executable on `PATH` that speaks ACP on stdio.
+Anything else is treated as an executable on `PATH` that speaks ACP on stdio:
+
+```powershell
+Invoke-Acp "..." -Agent my-agent -ArgumentList '--stdio'
+```
+
+**Verified against opencode 1.18.18**, which is the easiest one to try since it needs no npx
+download:
+
+```powershell
+Invoke-Acp "Read hello.txt and tell me the magic word." -Agent opencode -NoUi -AutoApprove
+```
+
+One cosmetic quirk worth knowing, since it looks like a bug here and is not: opencode sends
+tool-call titles with the drive letter stripped (`Users\andyb\...` rather than `C:\Users\andyb\...`).
+That is the agent's own text, passed through verbatim.
 
 ## The UI
 

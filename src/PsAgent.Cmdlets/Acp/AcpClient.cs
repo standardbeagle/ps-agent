@@ -22,6 +22,10 @@ public sealed record AcpLaunch(string Command, IReadOnlyList<string> Arguments)
             ["claude-code-acp"] = new("npx", ["-y", "@zed-industries/claude-code-acp"]),
             ["gemini"] = new("npx", ["-y", "@google/gemini-cli", "--experimental-acp"]),
             ["codex"] = new("npx", ["-y", "@zed-industries/codex-acp"]),
+
+            // opencode ships ACP as a subcommand of its own binary rather than a separate package,
+            // so the preset is the binary plus `acp` — verified against opencode 1.18.18.
+            ["opencode"] = new("opencode", ["acp"]),
         };
 
     /// <summary>Resolve a friendly name, or an explicit command line, into a launch.</summary>
