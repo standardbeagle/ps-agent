@@ -149,3 +149,7 @@ Two things that run showed, both worth keeping in mind:
 - **The permission path is not exercised by every agent.** opencode did not send
   `session/request_permission` at all during those runs, so that branch remains covered only by the
   stub. Do not assume a real-agent run has tested it.
+- **Recording the session is what caught the encoding bug.** In the first VHS take the tool and
+  assistant markers rendered as `?` while `›`, `·` and `—` came through — the signature of CP1252,
+  not a missing font. The viewer now forces UTF-8 for the duration of the session. See
+  `docs/demo/README.md`.

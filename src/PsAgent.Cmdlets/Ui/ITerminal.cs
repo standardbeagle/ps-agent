@@ -37,6 +37,15 @@ internal interface ITerminal
 
     /// <summary>Park briefly when there is no key to read, so the repaint loop does not spin.</summary>
     void Idle(int milliseconds);
+
+    /// <summary>
+    /// Take ownership of the terminal for the duration of the viewer — in particular, guarantee
+    /// the output encoding can carry the transcript's glyphs.
+    /// </summary>
+    void BeginSession();
+
+    /// <summary>Hand the terminal back in the state it was found.</summary>
+    void EndSession();
 }
 
 /// <summary>The real terminal.</summary>
@@ -78,6 +87,57 @@ internal sealed class ConsoleTerminal : ITerminal
 
     /// <inheritdoc/>
     public void Idle(int milliseconds) => Thread.Sleep(milliseconds);
+
+    private System.Text.Encoding? _restoreEncoding;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>Forces UTF-8 output. The transcript's row markers are non-Latin-1 — <c>●</c>, <c>⚙</c>,
+    /// <c>✔</c>, <c>✘</c>, <c>↑↓</c> — and a console left on a legacy code page silently replaces
+    /// every one of them with <c>?</c>. Under CP1252 the failure is especially deceptive: <c>›</c>,
+    /// <c>·</c> and <c>—</c> are all in that code page and survive, so the transcript looks almost
+    /// right while the two markers that matter most (tool and assistant) are the ones lost.</para>
+    /// <para>PowerShell 7 usually defaults to UTF-8, so this is invisible most of the time — it is
+    /// the odd host that needs it, which is exactly why it cannot be left to chance.</para>
+    /// </remarks>
+    public void BeginSession()
+    {
+        try
+        {
+            if (Console.OutputEncoding.CodePage != System.Text.Encoding.UTF8.CodePage)
+            {
+                _restoreEncoding = Console.OutputEncoding;
+                Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            }
+        }
+        catch (Exception e) when (e is IOException or PlatformNotSupportedException or ArgumentException)
+        {
+            // A host that refuses the change still renders; the glyphs degrade rather than crash.
+            _restoreEncoding = null;
+        }
+    }
+
+    /// <inheritdoc/>
+    public void EndSession()
+    {
+        if (_restoreEncoding is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Console.OutputEncoding = _restoreEncoding;
+        }
+        catch (Exception e) when (e is IOException or PlatformNotSupportedException or ArgumentException)
+        {
+            // Nothing further to do — the process is leaving the viewer either way.
+        }
+        finally
+        {
+            _restoreEncoding = null;
+        }
+    }
 
     private static int Measure(Func<int> read, int fallback)
     {

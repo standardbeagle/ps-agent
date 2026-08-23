@@ -10,6 +10,12 @@ Two PowerShell cmdlets that put an agent in your terminal, both rendered through
 
 Both emit the same `PsAgent.AgentEvent` objects, so the transcript is a pipeline, not just a screen.
 
+![Invoke-Acp driving a live opencode session](docs/demo/ps-agent-acp.gif)
+
+*`Invoke-Acp -Agent opencode` — the prompt typed into the viewer, thought / tool / answer rows
+streaming in, a row expanded. Recorded with [VHS](https://github.com/charmbracelet/vhs); see
+[`docs/demo`](docs/demo).*
+
 ```powershell
 Invoke-Agent "why does the parser drop trailing newlines?"
 Invoke-Acp -Agent claude "add a regression test for the trailing-newline bug"

@@ -195,6 +195,7 @@ internal sealed class TranscriptView
 
         try
         {
+            _terminal.BeginSession();
             _terminal.Write("\x1b[?1049h");
             _terminal.SetCursorVisible(false);
 
@@ -300,6 +301,7 @@ internal sealed class TranscriptView
 
             turnCts?.Dispose();
             _terminal.Write("\x1b[2J\x1b[H\x1b[?1049l");
+            _terminal.EndSession();
             _terminal.SetCursorVisible(true);
         }
     }

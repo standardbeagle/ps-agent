@@ -134,6 +134,22 @@ internal sealed class ScriptedTerminal : ITerminal
         // Nothing to do; recorded only by its absence of failure.
     }
 
+    /// <summary>True between <see cref="BeginSession"/> and <see cref="EndSession"/>.</summary>
+    public bool SessionOpen { get; private set; }
+
+    /// <summary>How many times a session has been opened — a viewer must open exactly one.</summary>
+    public int SessionOpenCount { get; private set; }
+
+    /// <inheritdoc/>
+    public void BeginSession()
+    {
+        SessionOpen = true;
+        SessionOpenCount++;
+    }
+
+    /// <inheritdoc/>
+    public void EndSession() => SessionOpen = false;
+
     /// <inheritdoc/>
     public void Idle(int milliseconds)
     {

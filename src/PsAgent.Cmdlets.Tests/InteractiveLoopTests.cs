@@ -39,6 +39,48 @@ public sealed class InteractiveLoopTests
         Assert.EndsWith("\x1b[?1049l", terminal.Output, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The viewer must claim the terminal (and hand it back), because that is where the output
+    /// encoding is forced to UTF-8. Skipping it is silent: on a console left at a legacy code page
+    /// the transcript still draws, but every non-Latin-1 row marker becomes `?`.
+    /// </summary>
+    [Fact]
+    public void The_loop_opens_exactly_one_terminal_session_and_closes_it()
+    {
+        var terminal = new ScriptedTerminal();
+        terminal.Type("q");
+
+        View(terminal).Run(initialPrompt: null, CancellationToken.None);
+
+        Assert.Equal(1, terminal.SessionOpenCount);
+        Assert.False(terminal.SessionOpen);
+    }
+
+    /// <summary>
+    /// Why <see cref="ITerminal.BeginSession"/> forces UTF-8: these row markers are outside every
+    /// single-byte code page, so a console left on a legacy one replaces them with `?`.
+    /// </summary>
+    /// <remarks>
+    /// The check is "beyond Latin-1" rather than a CP1252 round-trip, because
+    /// <c>Encoding.GetEncoding(1252)</c> needs <c>CodePagesEncodingProvider</c> registered and
+    /// silently behaves differently where it is not — an environment-dependent test would assert
+    /// nothing on the machines that matter. Observed live: under CP1252 `›`, `·` and `—` survive
+    /// while `●`, `⚙`, `✔`, `✘` and `↑↓` all become `?`, so the transcript reads almost right with
+    /// exactly the tool and assistant markers missing.
+    /// </remarks>
+    [Theory]
+    [InlineData(AgentEventKind.Assistant, AgentToolStatus.None)]
+    [InlineData(AgentEventKind.ToolCall, AgentToolStatus.InProgress)]
+    [InlineData(AgentEventKind.ToolResult, AgentToolStatus.Completed)]
+    [InlineData(AgentEventKind.ToolResult, AgentToolStatus.Failed)]
+    [InlineData(AgentEventKind.Error, AgentToolStatus.None)]
+    public void Row_markers_need_utf8_output(AgentEventKind kind, AgentToolStatus status)
+    {
+        var glyph = new AgentEvent { Kind = kind, Title = "t", Status = status }.Glyph;
+
+        Assert.All(glyph, ch => Assert.True(ch > 0xFF, $"U+{(int)ch:X4} would survive a single-byte code page"));
+    }
+
     // Quitting cancels an in-flight turn — by design. So `q` must not be queued behind Enter:
     // the loop would consume it before the submit task ran and cancel the turn before it started.
     // Wait for the turn to be observed, then quit.

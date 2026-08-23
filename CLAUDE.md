@@ -46,6 +46,10 @@ Unlike ps-bash — where Strata is optional and the styled cmdlets compile out �
    them silently breaks `Invoke-Agent -NoUi | Show-Styled` with no error.
 5. **Never advertise an ACP capability you do not implement.** An agent that takes you up on
    `terminal: true` hangs on a call that never returns.
+6. **The viewer forces UTF-8 output while it owns the screen** (`ConsoleTerminal.BeginSession`).
+   Every row marker is beyond Latin-1, so a console on a legacy code page replaces them with `?`.
+   CP1252 makes it worse than obvious breakage: `›`, `·` and `—` are in that code page and survive,
+   so the transcript looks almost right with only the tool and assistant markers gone.
 
 ## SDK gotchas (Anthropic C#)
 
