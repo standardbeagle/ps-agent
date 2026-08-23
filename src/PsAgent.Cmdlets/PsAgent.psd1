@@ -15,7 +15,7 @@
     PrivateData = @{
         PSData = @{
             Tags         = @('agent', 'acp', 'claude', 'llm', 'tui', 'strata')
-            ProjectUri   = 'https://github.com/andylbrummer/ps-agent'
+            ProjectUri   = 'https://github.com/standardbeagle/ps-agent'
             ReleaseNotes = '0.1.0: Invoke-Agent (Anthropic Messages API tool loop) and Invoke-Acp (Agent Client Protocol client), sharing one Strata-rendered transcript viewer.'
         }
     }

@@ -29,12 +29,30 @@ one renderer, one stylesheet, one set of keys.
 
 ## Install
 
-Needs the [Strata](../strata) local feed — Strata is not on nuget.org yet:
+This repo builds against two siblings, by **relative path** — clone all three next to each other:
+
+```bash
+git clone https://github.com/standardbeagle/ps-bash
+git clone https://github.com/standardbeagle/strata
+git clone https://github.com/standardbeagle/ps-agent
+```
+
+```
+core/
+├── ps-bash/     ← ProjectReference: Show-Styled, BashRuntime.RunChildProcess
+├── strata/      ← the CSS cascade, consumed from strata/local-feed
+└── ps-agent/    ← this repo
+```
+
+Strata is not on nuget.org yet, so its local feed has to be packed first:
 
 ```bash
 cd ../strata && ./scripts/pack-local.sh      # populates ../strata/local-feed
 cd ../ps-agent && dotnet build -c Release -m:1
 ```
+
+The build auto-detects the feed and the Strata version, so a strata bump needs no edit here. A
+missing feed fails with that instruction rather than a wall of `CS0246`.
 
 Then import the built module:
 
