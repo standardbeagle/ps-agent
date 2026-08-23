@@ -192,6 +192,17 @@ Design notes: [`docs/specs/agent-loop.md`](docs/specs/agent-loop.md),
 
 ## Known gaps
 
+- **`Invoke-Agent` has never completed a real turn.** It was built and tested without Anthropic
+  credentials on hand. What is verified: the request reaches the API and an auth failure surfaces
+  as a clean transcript row rather than a crash — so the request shape is at least well-formed
+  enough to be rejected on credentials alone. What is **not** verified against the live API: the
+  tool-call loop, the assistant echo (thinking signatures, `tool_use` inputs), the `tool_result`
+  round-trip, and multi-turn continuation. Every piece has unit tests; none of it has run
+  end-to-end. Treat the first real session as a smoke test. `Invoke-Acp`, by contrast, is verified
+  end-to-end against a live agent.
+- **The permission chooser is covered only by the stub agent.** opencode never sent
+  `session/request_permission` in any run, so that branch has not been exercised against a real
+  agent.
 - **The agent loop is non-streaming.** Each turn is one `Messages.Create`, which keeps the
   assistant echo (thinking signatures, tool_use inputs) exact. The viewer shows a live status row
   so a long turn does not read as frozen, but prose does not appear token by token. See the spec
