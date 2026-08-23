@@ -4,3 +4,8 @@ obj/
 .vs/
 local-feed/
 TestResults/
+
+# Local credentials. Never commit: this repo is public.
+.env
+.env.*
+!.env.example
