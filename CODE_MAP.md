@@ -32,6 +32,7 @@ it on the pipeline in the shape `Show-Styled` reads unconfigured (`Name` + `clas
 | `Acp/AcpClient.cs` | ACP: handshake, session, prompt, and the `fs/*` + permission callbacks we serve. |
 | `Acp/AcpTranscript.cs` | Folds `session/update` into `AgentEvent` rows (chunk coalescing, tool-call matching). |
 | `Ui/TranscriptView.cs` | The alt-screen key loop, repaint, prompt line, and modal chooser. |
+| `Ui/ITerminal.cs` | Where the viewer draws and reads keys. `ConsoleTerminal` ships; a scripted one drives the loop in tests. |
 | `Ui/AgentNode.cs` | Mutable Strata tree node (stable identity + pseudo-state). |
 | `Ui/AgentStyles.cs` | Stylesheet resolution: name → embedded, user override, inline CSS, or path. |
 | `styles/agent.pcss` | The transcript sheet. |
@@ -63,7 +64,16 @@ it on the pipeline in the shape `Show-Styled` reads unconfigured (`Name` + `clas
 
 ## Testing
 
-`src/PsAgent.Cmdlets.Tests` — every pure seam is unit-tested; `AcpClientIntegrationTests` drives
-the real client against `fixtures/stub-acp-agent.js` (dependency-free Node), so the protocol wiring
-is covered with no ACP agent, no network, and no API key. Those tests **skip visibly** when node is
-absent rather than passing silently.
+`src/PsAgent.Cmdlets.Tests` — every pure seam is unit-tested. Beyond that:
+
+- `AcpClientIntegrationTests` drives the real client against `fixtures/stub-acp-agent.js`
+  (dependency-free Node), so the protocol wiring is covered with no ACP agent, no network, and no
+  API key.
+- `TranscriptRenderTests` renders real frames through the real stylesheet and projection, with the
+  terminal size injected. This is what catches a `agent.pcss` selector that matches nothing — a
+  failure that otherwise renders plain text and looks almost right.
+- `InteractiveLoopTests` drives the shipping key loop through `ScriptedTerminal`, including one
+  test against a live `opencode acp` session.
+
+Tests that need an absent tool **skip visibly** (`[SkippableFact]`) rather than returning early — a
+test that quietly no-ops is indistinguishable from one that ran.

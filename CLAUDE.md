@@ -74,3 +74,9 @@ shape you also wrote.
 
 **A test that returns early when its fixture is missing is indistinguishable from one that ran.**
 Use `[SkippableFact]` + `Skip.If`, so the run reports it.
+
+**The viewer is testable — keep it that way.** `TranscriptView` draws and reads keys through
+`ITerminal`, never `Console`. That is what lets `InteractiveLoopTests` drive the shipping key loop
+with scripted keys (and against a live agent), and `TranscriptRenderTests` render real frames with
+the terminal size injected. A direct `Console.` call in `Ui/` silently removes a layer from test
+coverage, because the loop still works by hand — it just stops being reachable by anything else.

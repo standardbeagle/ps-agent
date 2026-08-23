@@ -68,6 +68,7 @@ internal sealed class TranscriptView
     private readonly Cascade _cascade;
     private readonly SpectreProjection _projection;
     private readonly string _header;
+    private readonly ITerminal _terminal;
 
     private int _focus;
     private bool _follow = true;
@@ -75,9 +76,16 @@ internal sealed class TranscriptView
     private string _status = string.Empty;
 
     /// <summary>Build a viewer over a stylesheet's CSS text.</summary>
-    public TranscriptView(string css, string header)
+    /// <param name="css">The stylesheet text.</param>
+    /// <param name="header">The title line above the transcript.</param>
+    /// <param name="terminal">
+    /// Where to draw and read keys. Defaults to the real console; a test supplies a scripted one to
+    /// drive the loop without a TTY.
+    /// </param>
+    public TranscriptView(string css, string header, ITerminal? terminal = null)
     {
         _header = header;
+        _terminal = terminal ?? ConsoleTerminal.Instance;
 
         var registry = StylingProperties.CreateRegistry();
         LayoutProperties.RegisterAll(registry);
@@ -94,7 +102,7 @@ internal sealed class TranscriptView
     public bool Busy { get; private set; }
 
     /// <summary>A real terminal is required; a redirected stream gets the plain pipeline instead.</summary>
-    public static bool IsInteractive => !Console.IsInputRedirected && !Console.IsOutputRedirected;
+    public static bool IsInteractive => ConsoleTerminal.Instance.IsInteractive;
 
     /// <summary>The one-line status shown above the key legend.</summary>
     public string Status
@@ -177,7 +185,7 @@ internal sealed class TranscriptView
     /// </summary>
     public int Run(string? initialPrompt, CancellationToken ct)
     {
-        if (!IsInteractive)
+        if (!_terminal.IsInteractive)
         {
             return -1;
         }
@@ -187,8 +195,8 @@ internal sealed class TranscriptView
 
         try
         {
-            Console.Write("\x1b[?1049h");
-            TrySetCursorVisible(false);
+            _terminal.Write("\x1b[?1049h");
+            _terminal.SetCursorVisible(false);
 
             if (!string.IsNullOrWhiteSpace(initialPrompt))
             {
@@ -209,15 +217,15 @@ internal sealed class TranscriptView
 
                 Repaint();
 
-                if (!Console.KeyAvailable)
+                if (!_terminal.KeyAvailable)
                 {
                     // A short park rather than a blocking ReadKey: the loop must keep repainting
                     // while a turn streams rows in from a worker task.
-                    Thread.Sleep(30);
+                    _terminal.Idle(30);
                     continue;
                 }
 
-                var key = Console.ReadKey(intercept: true);
+                var key = _terminal.ReadKey();
                 switch (Decide(key.Key, key.KeyChar, Busy))
                 {
                     case ViewAction.Quit:
@@ -291,8 +299,8 @@ internal sealed class TranscriptView
             }
 
             turnCts?.Dispose();
-            Console.Write("\x1b[2J\x1b[H\x1b[?1049l");
-            TrySetCursorVisible(true);
+            _terminal.Write("\x1b[2J\x1b[H\x1b[?1049l");
+            _terminal.SetCursorVisible(true);
         }
     }
 
@@ -357,7 +365,7 @@ internal sealed class TranscriptView
     /// </summary>
     public int? Choose(string title, IReadOnlyList<string> options)
     {
-        if (!IsInteractive || options.Count == 0)
+        if (!_terminal.IsInteractive || options.Count == 0)
         {
             return null;
         }
@@ -377,9 +385,9 @@ internal sealed class TranscriptView
             }
 
             sb.Append("\n  ↑↓ choose · Enter confirm · Esc cancel");
-            Console.Write(sb.ToString());
+            _terminal.Write(sb.ToString());
 
-            var key = Console.ReadKey(intercept: true);
+            var key = _terminal.ReadKey();
             switch (key.Key)
             {
                 case ConsoleKey.UpArrow:
@@ -416,8 +424,8 @@ internal sealed class TranscriptView
         var buffer = new StringBuilder();
         while (true)
         {
-            Console.Write("\x1b[2J\x1b[H" + RenderFrame(promptText: buffer.ToString()));
-            var key = Console.ReadKey(intercept: true);
+            _terminal.Write("\x1b[2J\x1b[H" + RenderFrame(promptText: buffer.ToString()));
+            var key = _terminal.ReadKey();
             switch (key.Key)
             {
                 case ConsoleKey.Enter:
@@ -454,10 +462,35 @@ internal sealed class TranscriptView
             _dirty = false;
         }
 
-        Console.Write("\x1b[2J\x1b[H" + RenderFrame(promptText: null));
+        _terminal.Write("\x1b[2J\x1b[H" + RenderFrame(promptText: null));
     }
 
-    private string RenderFrame(string? promptText)
+    /// <summary>
+    /// Render one frame to a string with the terminal's size supplied rather than read from the
+    /// console — the seam that lets a test exercise the real stylesheet cascade and projection with
+    /// no TTY. Without it the entire visual layer is only reachable by eye.
+    /// </summary>
+    internal string RenderSnapshot(int width, int height, string? promptText = null) =>
+        RenderFrame(promptText, width, height);
+
+    /// <summary>Move the cursor and expand a row from outside the key loop (rendering tests).</summary>
+    internal void SetView(int focus, params int[] expanded)
+    {
+        lock (_sync)
+        {
+            _focus = focus;
+            _expanded.Clear();
+            foreach (var i in expanded)
+            {
+                _expanded.Add(i);
+            }
+
+            _follow = false;
+            _dirty = true;
+        }
+    }
+
+    private string RenderFrame(string? promptText, int? widthOverride = null, int? heightOverride = null)
     {
         AgentEvent[] rows;
         int focus, total;
@@ -475,7 +508,7 @@ internal sealed class TranscriptView
 
         // Reserve the chrome (header + status + legend + prompt) so the transcript window never
         // scrolls the footer off the screen.
-        var height = SafeHeight();
+        var height = heightOverride ?? _terminal.Height;
         var window = Math.Max(3, height - 6);
         var (start, end) = Window(total, focus, window, expanded);
 
@@ -507,7 +540,7 @@ internal sealed class TranscriptView
         surface.SetChildren(children);
 
         var result = _cascade.Compute(surface, _stylesheet);
-        var frame = RenderToAnsi(_projection.Project(surface, result));
+        var frame = RenderToAnsi(_projection.Project(surface, result), widthOverride ?? _terminal.Width);
 
         var sb = new StringBuilder();
         sb.Append("\x1b[1m").Append(_header).Append("\x1b[0m\n");
@@ -580,7 +613,7 @@ internal sealed class TranscriptView
     }
 
     /// <summary>Render a Spectre renderable to an ANSI frame at the current width (honours NO_COLOR).</summary>
-    private static string RenderToAnsi(IRenderable renderable)
+    private static string RenderToAnsi(IRenderable renderable, int? widthOverride = null)
     {
         var writer = new StringWriter();
         var noColor = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
@@ -593,7 +626,7 @@ internal sealed class TranscriptView
 
         try
         {
-            var width = Console.WindowWidth;
+            var width = widthOverride ?? 0;
             if (width > 0)
             {
                 console.Profile.Width = width;
@@ -608,28 +641,4 @@ internal sealed class TranscriptView
         return writer.ToString().TrimEnd('\r', '\n');
     }
 
-    private static int SafeHeight()
-    {
-        try
-        {
-            var h = Console.WindowHeight;
-            return h > 0 ? h : 24;
-        }
-        catch (IOException)
-        {
-            return 24;
-        }
-    }
-
-    private static void TrySetCursorVisible(bool visible)
-    {
-        try
-        {
-            Console.CursorVisible = visible;
-        }
-        catch (Exception e) when (e is IOException or PlatformNotSupportedException)
-        {
-            // Host does not support cursor control.
-        }
-    }
 }
