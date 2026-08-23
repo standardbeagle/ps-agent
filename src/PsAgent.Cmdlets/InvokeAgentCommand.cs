@@ -83,6 +83,26 @@ public sealed class InvokeAgentCommand : PSCmdlet
     [Parameter]
     public string? SystemPrompt { get; set; }
 
+    /// <summary>
+    /// The API key to authenticate with. Omitted, it is resolved from the environment, the
+    /// workspace's <c>.env.local</c>, a CLI credential store, then the SDK's own lookup.
+    /// </summary>
+    [Parameter]
+    public string? ApiKey { get; set; }
+
+    /// <summary>
+    /// Endpoint to call instead of Anthropic's. Any gateway serving the Anthropic Messages API
+    /// works; <c>https://openrouter.ai/api</c> is verified. Give the base <b>without</b> the
+    /// version segment — the SDK appends <c>/v1/messages</c> itself.
+    /// </summary>
+    [Parameter]
+    [Alias("Endpoint")]
+    public string? BaseUrl { get; set; }
+
+    /// <summary>Do not read credentials out of other tools' stores or the workspace's .env.local.</summary>
+    [Parameter]
+    public SwitchParameter NoCredentialDiscovery { get; set; }
+
     private readonly ConcurrentQueue<AgentEvent> _pending = new();
 
     /// <inheritdoc/>
@@ -99,12 +119,28 @@ public sealed class InvokeAgentCommand : PSCmdlet
             SystemPrompt = SystemPrompt,
         };
 
+        var discovered = NoCredentialDiscovery
+            ? []
+            : CliCredentialStore.DiscoverAll();
+        var dotEnv = NoCredentialDiscovery
+            ? null
+            : DotEnvFile.Read(root);
+
+        var credential = AgentCredentialResolver.Resolve(ApiKey, BaseUrl, env: null, discovered, dotEnv);
+
         AnthropicClient client;
         try
         {
-            // Zero-arg: the SDK resolves ANTHROPIC_API_KEY, then ANTHROPIC_AUTH_TOKEN, then an
-            // `ant auth login` profile. An unset env var does not mean unauthenticated.
-            client = new AnthropicClient();
+            // A null ApiKey deliberately leaves the SDK to resolve: it reads ANTHROPIC_API_KEY,
+            // then ANTHROPIC_AUTH_TOKEN, then an `ant auth login` profile. An unset env var does
+            // not mean unauthenticated.
+            // ApiKey and BaseUrl are init-only, so the client is built in one initializer. Leaving
+            // ApiKey null is meaningful, not a gap: it is what defers to the SDK's own resolution.
+            client = new AnthropicClient
+            {
+                ApiKey = credential.ApiKey is { Length: > 0 } ? credential.ApiKey : null,
+                BaseUrl = credential.BaseUrl is { Length: > 0 } ? credential.BaseUrl : null,
+            };
         }
         catch (Exception e)
         {
@@ -112,6 +148,16 @@ public sealed class InvokeAgentCommand : PSCmdlet
                 e, "AnthropicClientInit", ErrorCategory.AuthenticationError, null));
             return;
         }
+
+        // Which credential is in play is the first question any auth failure raises, so the
+        // transcript answers it up front rather than leaving it to be inferred.
+        var endpoint = credential.BaseUrl is { Length: > 0 } ? $" -> {credential.BaseUrl}" : string.Empty;
+        var authRow = new AgentEvent
+        {
+            Kind = AgentEventKind.Status,
+            Title = $"auth: {credential.Detail}{endpoint}",
+            Body = AgentCredentialResolver.DescribeUnused(discovered),
+        };
 
         var interactive = !NoUi && TranscriptView.IsInteractive;
         TranscriptView? view = null;
@@ -132,6 +178,7 @@ public sealed class InvokeAgentCommand : PSCmdlet
 
         if (!interactive)
         {
+            _pending.Enqueue(authRow);
             RunHeadless(agent);
             return;
         }
@@ -140,6 +187,7 @@ public sealed class InvokeAgentCommand : PSCmdlet
         {
             Status = "ready",
         };
+        view.Append(authRow);
         view.OnSubmit = (text, ct) => agent.RunTurnAsync(text, view!.Append, ct);
 
         var code = view.Run(Prompt, CancellationToken.None);

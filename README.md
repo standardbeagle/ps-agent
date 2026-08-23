@@ -66,9 +66,27 @@ Then import the built module:
 Import-Module ./src/PsAgent.Cmdlets/bin/Release/net10.0/PsAgent.psd1
 ```
 
-`Invoke-Agent` needs Anthropic credentials. The SDK resolves `ANTHROPIC_API_KEY`, then
-`ANTHROPIC_AUTH_TOKEN`, then an `ant auth login` profile — an unset environment variable does not
-mean unauthenticated.
+`Invoke-Agent` resolves a credential in a fixed order and says which step won as the first
+transcript row. `-ApiKey`, then `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, then a gateway key
+or `ANTHROPIC_API_KEY` in the workspace's `.env.local`, then an `anthropic` key in another CLI's
+credential store, then the SDK's own lookup ending at an `ant auth login` profile. An unset
+environment variable does not mean unauthenticated.
+
+Any endpoint serving the Anthropic Messages API works, which is how a gateway subscription drives
+the direct-API path. Verified end to end:
+
+```powershell
+Invoke-Agent "fix the bug in calc.py" `
+  -BaseUrl 'https://openrouter.ai/api' `
+  -Model 'anthropic/claude-sonnet-4.6'
+```
+
+Give the base **without** a version segment — the SDK appends `/v1/messages` itself.
+
+Discovery reads API keys, never sign-in tokens: an OAuth entry in a credential store was issued to
+a different application, so ps-agent lists it by name to explain the skip and does not read it.
+`-NoCredentialDiscovery` turns discovery off. Keep keys in `.env.local`, which this repo
+gitignores.
 
 `Invoke-Acp` needs whichever agent you point it at. The known names shell out through `npx`:
 
@@ -187,19 +205,19 @@ The ACP client has an end-to-end test against `fixtures/stub-acp-agent.js`, a de
 agent — so the handshake, framing, streamed updates and agent-to-client callbacks are covered with
 no ACP agent installed, no network, and no API key. Those tests self-skip when node is absent.
 
+Documentation site: **https://dev.standardbeagle.com/ps-agent/** (source in [`docs/`](docs), built
+by ps-agent itself — see [`docs/demo`](docs/demo)).
+
 Design notes: [`docs/specs/agent-loop.md`](docs/specs/agent-loop.md),
 [`docs/specs/acp-client.md`](docs/specs/acp-client.md).
 
 ## Known gaps
 
-- **`Invoke-Agent` has never completed a real turn.** It was built and tested without Anthropic
-  credentials on hand. What is verified: the request reaches the API and an auth failure surfaces
-  as a clean transcript row rather than a crash — so the request shape is at least well-formed
-  enough to be rejected on credentials alone. What is **not** verified against the live API: the
-  tool-call loop, the assistant echo (thinking signatures, `tool_use` inputs), the `tool_result`
-  round-trip, and multi-turn continuation. Every piece has unit tests; none of it has run
-  end-to-end. Treat the first real session as a smoke test. `Invoke-Acp`, by contrast, is verified
-  end-to-end against a live agent.
+- **`run_bash` can leave a daemon holding the workspace open.** When `ps-bash` is on PATH the
+  tool spawns it, and the `ps-bash-host` daemon it starts outlives the command. Twice that daemon
+  kept a handle on the workspace directory, so deleting it afterwards failed, and once it
+  inherited the caller's stdout and held a redirected pipe open past exit. The command itself
+  completes normally; only cleanup is affected.
 - **The permission chooser is covered only by the stub agent.** opencode never sent
   `session/request_permission` in any run, so that branch has not been exercised against a real
   agent.
