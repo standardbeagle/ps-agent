@@ -1,0 +1,41 @@
+---
+title: ps-agent
+description: Two PowerShell cmdlets that put an agent in your terminal, sharing one transcript model and one renderer.
+template: splash
+hero:
+  tagline: Two PowerShell cmdlets that put an agent in your terminal. Invoke-Agent is a minimal coding agent — a model, four tools, and a loop. Invoke-Acp drives Claude Code, Gemini, Codex or opencode as a subprocess. Both emit the same transcript objects.
+  actions:
+    - text: Get started
+      link: /ps-agent/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/standardbeagle/ps-agent
+      icon: external
+---
+
+```powershell
+Invoke-Agent "why does the parser drop trailing newlines?"
+Invoke-Acp -Agent claude "add a regression test for the trailing-newline bug"
+
+# ...and the same transcript, as objects
+Invoke-Agent "audit the error paths" -NoUi | Where-Object Kind -eq ToolCall
+Invoke-Agent "audit the error paths" -NoUi | Show-Styled
+```
+
+![Invoke-Acp driving a live opencode session](/ps-agent/ps-agent-acp.gif)
+
+*`Invoke-Acp -Agent opencode` — the prompt typed into the viewer, thought / tool / answer rows streaming in, a row expanded.*
+
+## Two cmdlets, one transcript
+
+| Cmdlet | Alias | What it is |
+|---|---|---|
+| `Invoke-Agent` | `agent`, `pia` | A minimal coding agent — a model, four tools, and a loop. |
+| `Invoke-Acp` | `acp` | An Agent Client Protocol client — drives another agent as a subprocess. |
+
+They answer different questions. `Invoke-Agent` owns the loop: every tool, every prompt, every
+token is visible and changeable. `Invoke-Acp` owns none of it: it is a front end for agents other
+people wrote, which is the only way to drive Claude Code and Gemini from the same keybindings.
+Both produce `PsAgent.AgentEvent` rows, so one renderer, one stylesheet and one set of keys serves
+either agent.
