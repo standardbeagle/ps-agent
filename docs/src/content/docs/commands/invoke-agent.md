@@ -32,6 +32,7 @@ opens empty and waits for `i`.
 | `ApiKey` | `string` | resolved | The key to authenticate with. See [Authentication](/ps-agent/reference/authentication/). |
 | `BaseUrl` | `string` | Anthropic | Alias `Endpoint`. A gateway serving the Anthropic Messages API, without a version segment. |
 | `NoCredentialDiscovery` | `switch` | off | Do not read credentials from CLI stores or `.env.local`. |
+| `OAuthProvider` | `string` | auto | Alias `OAuthProfile`. Use a browser sign-in stored by `Connect-Agent`. |
 
 A typical invocation:
 

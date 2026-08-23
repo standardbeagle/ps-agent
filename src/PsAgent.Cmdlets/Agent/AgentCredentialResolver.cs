@@ -15,6 +15,9 @@ public enum AgentCredentialSource
     /// <summary>A key in the workspace's <c>.env.local</c>.</summary>
     DotEnv,
 
+    /// <summary>A browser sign-in ps-agent performed itself, via <c>Connect-Agent</c>.</summary>
+    OAuth,
+
     /// <summary>Left to the SDK: its own env lookup, then an `ant auth login` profile.</summary>
     SdkDefault,
 }
@@ -28,7 +31,18 @@ public sealed record AgentCredential(
     AgentCredentialSource Source,
     string Detail,
     string? ApiKey = null,
-    string? BaseUrl = null);
+    string? BaseUrl = null)
+{
+    /// <summary>A bearer token, when the credential came from an OAuth sign-in rather than a key.</summary>
+    public string? AuthToken { get; init; }
+
+    /// <summary>
+    /// Headers the API requires alongside a bearer token. Anthropic's OAuth path needs
+    /// <c>anthropic-beta: oauth-2025-04-20</c>; without it the token is rejected as if it were bad.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ExtraHeaders { get; init; } =
+        new Dictionary<string, string>();
+}
 
 /// <summary>
 /// Decides how <c>Invoke-Agent</c> authenticates, in a fixed order, and can say which step won.
@@ -96,7 +110,8 @@ public static class AgentCredentialResolver
         string? explicitBaseUrl = null,
         Func<string, string?>? env = null,
         IReadOnlyList<DiscoveredCredential>? discovered = null,
-        IReadOnlyDictionary<string, string>? dotEnv = null)
+        IReadOnlyDictionary<string, string>? dotEnv = null,
+        ResolvedOAuth? oauth = null)
     {
         env ??= Environment.GetEnvironmentVariable;
         var baseUrl = Blank(explicitBaseUrl) ? env("ANTHROPIC_BASE_URL") : explicitBaseUrl;
@@ -109,6 +124,12 @@ public static class AgentCredentialResolver
                 AgentCredentialSource.Explicit, "-ApiKey parameter", explicitKey, baseUrl);
         }
 
+        // A profile the caller named is a deliberate act, so it outranks an ambient env var.
+        if (oauth is { Requested: true })
+        {
+            return FromOAuth(oauth, baseUrl);
+        }
+
         foreach (var name in EnvironmentVariables)
         {
             if (!Blank(env(name)))
@@ -118,6 +139,12 @@ public static class AgentCredentialResolver
                 return new AgentCredential(
                     AgentCredentialSource.Environment, $"{name} environment variable", null, baseUrl);
             }
+        }
+
+        // An auto-detected sign-in ranks below an explicit env var but above file discovery.
+        if (oauth is not null)
+        {
+            return FromOAuth(oauth, baseUrl);
         }
 
         // A gateway's own key, named the way that gateway names it, once -BaseUrl says to use it.
@@ -228,5 +255,38 @@ public static class AgentCredentialResolver
         return string.Join(" ", parts);
     }
 
+    private static AgentCredential FromOAuth(ResolvedOAuth oauth, string? baseUrl) =>
+        new(AgentCredentialSource.OAuth,
+            $"{oauth.ProfileName} sign-in{(oauth.ExpiresAt is { } e ? $", valid until {e:u}" : string.Empty)}",
+            ApiKey: null,
+            BaseUrl: baseUrl ?? oauth.BaseUrl)
+        {
+            AuthToken = oauth.AccessToken,
+            ExtraHeaders = oauth.ExtraHeaders,
+        };
+
     private static bool Blank(string? s) => string.IsNullOrWhiteSpace(s);
+}
+
+/// <summary>An OAuth login that has already been loaded and refreshed, ready to authenticate with.</summary>
+/// <param name="ProfileName">Which profile it belongs to.</param>
+/// <param name="AccessToken">The bearer token.</param>
+/// <param name="Requested">
+/// True when the caller named this profile. A named profile outranks an ambient environment
+/// variable; a login merely found on disk does not.
+/// </param>
+/// <param name="BaseUrl">Endpoint the profile is good for, used when no -BaseUrl was given.</param>
+/// <param name="ExtraHeaders">Headers the API needs alongside the token.</param>
+/// <param name="ExpiresAt">When it stops working, for the transcript row.</param>
+public sealed record ResolvedOAuth(
+    string ProfileName,
+    string AccessToken,
+    bool Requested,
+    string? BaseUrl = null,
+    IReadOnlyDictionary<string, string>? ExtraHeaders = null,
+    DateTimeOffset? ExpiresAt = null)
+{
+    /// <summary>Headers to send, never null.</summary>
+    public IReadOnlyDictionary<string, string> ExtraHeaders { get; init; } =
+        ExtraHeaders ?? new Dictionary<string, string>();
 }

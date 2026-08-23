@@ -83,6 +83,19 @@ Invoke-Agent "fix the bug in calc.py" `
 
 Give the base **without** a version segment — the SDK appends `/v1/messages` itself.
 
+`Connect-Agent` signs in through the browser when you would rather not manage a key at all —
+an authorization-code flow with PKCE and a loopback redirect, run by ps-agent itself:
+
+```powershell
+Connect-Agent -ShowExample           # the provider profile shape
+Connect-Agent -Provider my-provider  # opens the browser, stores and refreshes the token
+Connect-Agent -List
+```
+
+The provider profile carries the `clientId`, because a public OAuth client is an identity the
+provider issues to a named application: ps-agent ships the mechanism, you supply the identity you
+are entitled to use.
+
 Discovery reads API keys, never sign-in tokens: an OAuth entry in a credential store was issued to
 a different application, so ps-agent lists it by name to explain the skip and does not read it.
 `-NoCredentialDiscovery` turns discovery off. Keep keys in `.env.local`, which this repo

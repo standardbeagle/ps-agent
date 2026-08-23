@@ -7,7 +7,7 @@
     Description          = 'A minimal coding agent (Invoke-Agent) and an Agent Client Protocol client (Invoke-Acp), both rendered through Show-Styled''s Strata stylesheet cascade.'
     PowerShellVersion    = '7.4'
 
-    CmdletsToExport      = @('Invoke-Agent', 'Invoke-Acp')
+    CmdletsToExport      = @('Invoke-Agent', 'Invoke-Acp', 'Connect-Agent', 'Disconnect-Agent')
     FunctionsToExport    = @()
     VariablesToExport    = @()
     AliasesToExport      = @('agent', 'pia', 'acp')

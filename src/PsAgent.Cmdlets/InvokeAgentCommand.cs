@@ -3,6 +3,7 @@ using System.Management.Automation;
 using Anthropic;
 using Anthropic.Models.Messages;
 using PsAgent.Cmdlets.Agent;
+using PsAgent.Cmdlets.Agent.OAuth;
 using PsAgent.Cmdlets.Ui;
 
 namespace PsAgent.Cmdlets;
@@ -103,6 +104,14 @@ public sealed class InvokeAgentCommand : PSCmdlet
     [Parameter]
     public SwitchParameter NoCredentialDiscovery { get; set; }
 
+    /// <summary>
+    /// Authenticate with a browser sign-in stored by <c>Connect-Agent</c>. Omitted, a single stored
+    /// sign-in is used automatically; with several, name one.
+    /// </summary>
+    [Parameter]
+    [Alias("OAuthProfile")]
+    public string? OAuthProvider { get; set; }
+
     private readonly ConcurrentQueue<AgentEvent> _pending = new();
 
     /// <inheritdoc/>
@@ -126,7 +135,19 @@ public sealed class InvokeAgentCommand : PSCmdlet
             ? null
             : DotEnvFile.Read(root);
 
-        var credential = AgentCredentialResolver.Resolve(ApiKey, BaseUrl, env: null, discovered, dotEnv);
+        // Loading the sign-in may refresh it, which is a network call, so it happens here rather
+        // than inside resolution — the resolver stays a pure decision over what is available.
+        ResolvedOAuth? oauth = null;
+        var authNotes = new List<string>();
+        if (!NoCredentialDiscovery || !string.IsNullOrWhiteSpace(OAuthProvider))
+        {
+            using var http = new HttpClient();
+            oauth = OAuthCredentialProvider
+                .TryResolveAsync(OAuthProvider, http, DateTimeOffset.UtcNow, authNotes.Add)
+                .GetAwaiter().GetResult();
+        }
+
+        var credential = AgentCredentialResolver.Resolve(ApiKey, BaseUrl, env: null, discovered, dotEnv, oauth);
 
         AnthropicClient client;
         try
@@ -139,7 +160,15 @@ public sealed class InvokeAgentCommand : PSCmdlet
             client = new AnthropicClient
             {
                 ApiKey = credential.ApiKey is { Length: > 0 } ? credential.ApiKey : null,
+                // An OAuth sign-in authenticates as a bearer token, not a key, and the provider
+                // may require extra headers alongside it.
+                AuthToken = credential.AuthToken is { Length: > 0 } ? credential.AuthToken : null,
                 BaseUrl = credential.BaseUrl is { Length: > 0 } ? credential.BaseUrl : null,
+                // Provider-required headers ride on a handler rather than the SDK's ExtraHeaders,
+                // which is documented but not publicly settable.
+                HttpClient = credential.ExtraHeaders.Count > 0
+                    ? new HttpClient(new HeaderInjectingHandler(credential.ExtraHeaders))
+                    : null,
             };
         }
         catch (Exception e)
@@ -156,7 +185,11 @@ public sealed class InvokeAgentCommand : PSCmdlet
         {
             Kind = AgentEventKind.Status,
             Title = $"auth: {credential.Detail}{endpoint}",
-            Body = AgentCredentialResolver.DescribeUnused(discovered),
+            Body = string.Join(
+                Environment.NewLine,
+                new[] { AgentCredentialResolver.DescribeUnused(discovered) }
+                    .Concat(authNotes)
+                    .Where(l => !string.IsNullOrWhiteSpace(l))),
         };
 
         var interactive = !NoUi && TranscriptView.IsInteractive;

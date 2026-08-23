@@ -25,6 +25,52 @@ transcript row:
 An unset environment variable does not mean unauthenticated — a profile may still apply. Steps 3
 to 5 are discovery; `-NoCredentialDiscovery` turns them off.
 
+## Signing in with a browser
+
+`Connect-Agent` runs an authorization-code flow with PKCE (RFC 7636) and a loopback redirect
+(RFC 8252): ps-agent starts a listener on `localhost`, opens the provider's consent page, and
+catches the redirect. The code never transits a clipboard, and no client secret ships with the
+module -- the flow proves possession of a one-time verifier instead.
+
+```powershell
+Connect-Agent -ShowExample          # the profile shape, and where to put it
+Connect-Agent -Provider my-provider # opens the browser, stores the token
+Connect-Agent -List                 # what is configured, and what is signed in
+Disconnect-Agent my-provider        # forget the token, keep the profile
+```
+
+Then `Invoke-Agent` uses it. With one sign-in stored it is picked up automatically; with several,
+name one with `-OAuthProvider`. The token refreshes itself when it is within two minutes of
+expiry, and the transcript says so.
+
+```
+- auth: my-provider sign-in, valid until 2026-08-23 17:21:32Z -> https://api.example.com
+```
+
+A provider is described by a JSON profile in `~/.config/ps-agent/oauth/<name>.json`:
+
+```json
+{
+  "name": "my-provider",
+  "authorizeUrl": "https://auth.example.com/oauth/authorize",
+  "tokenUrl": "https://auth.example.com/oauth/token",
+  "clientId": "<the client id the provider issued to your application>",
+  "scopes": ["openid", "offline_access"],
+  "redirectPort": 1455,
+  "redirectPath": "/auth/callback",
+  "baseUrl": "https://api.example.com",
+  "extraHeaders": {}
+}
+```
+
+The `clientId` is configuration rather than something built in, because a public OAuth client is
+an identity a provider issues to a named application. ps-agent ships the mechanism; you supply the
+identity you are entitled to use. `extraHeaders` covers providers that require something alongside
+a bearer token -- Anthropic's OAuth path wants `anthropic-beta: oauth-2025-04-20`, and without it
+the token is rejected as though it were invalid.
+
+Tokens are stored beside the profile as `<name>.token.json`, chmod 600 on POSIX.
+
 ## Gateways
 
 Any endpoint serving the Anthropic Messages API works. OpenRouter is verified end to end:
