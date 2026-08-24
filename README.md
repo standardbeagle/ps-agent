@@ -83,6 +83,17 @@ Invoke-Agent "fix the bug in calc.py" `
 
 Give the base **without** a version segment — the SDK appends `/v1/messages` itself.
 
+`Invoke-Agent` speaks two wire formats, chosen by `-Api`: the Anthropic Messages API, or the
+OpenAI-compatible `/chat/completions` shape that most other services expose. `auto` follows the
+credential, because **Anthropic restricts its OAuth to Claude Code** — so a browser sign-in
+obtained by anything else belongs to an OpenAI-compatible service, and that is where it can be
+spent. Verified against OpenRouter with real tool calling:
+
+```powershell
+Invoke-Agent "fix the bug in calc.py" -Api openai `
+  -BaseUrl 'https://openrouter.ai/api/v1' -Model 'openai/gpt-4o-mini'
+```
+
 `Connect-Agent` signs in through the browser when you would rather not manage a key at all —
 an authorization-code flow with PKCE and a loopback redirect, run by ps-agent itself:
 

@@ -25,6 +25,43 @@ transcript row:
 An unset environment variable does not mean unauthenticated — a profile may still apply. Steps 3
 to 5 are discovery; `-NoCredentialDiscovery` turns them off.
 
+## Two transports
+
+`Invoke-Agent` speaks either the Anthropic Messages API or the OpenAI-compatible
+`/chat/completions` shape. `-Api` selects; `auto` follows the credential.
+
+| `-Api` | Talks to |
+|---|---|
+| `auto` (default) | `openai` when a browser sign-in is in play, otherwise `anthropic` |
+| `anthropic` | the Anthropic Messages API, through the SDK |
+| `openai` | any endpoint serving `/chat/completions` |
+
+`auto` follows the credential because **Anthropic restricts its OAuth to Claude Code**. A bearer
+token any other client obtained therefore belongs to a service speaking the OpenAI shape, and that
+is where a browser sign-in can actually be spent.
+
+Verified against OpenRouter's OpenAI-compatible endpoint, with real tool calling:
+
+```powershell
+Invoke-Agent "Read calc.py, fix the bug in add(), then run it to prove the fix." `
+  -Api openai `
+  -BaseUrl 'https://openrouter.ai/api/v1' `
+  -Model 'openai/gpt-4o-mini'
+```
+
+```
+- auth: OPEN_ROUTER_KEY in .env.local (via openrouter.ai) -> ... [OpenAI-compatible]
+⚙ read_file calc.py    ✔ read calc.py (33 chars)
+⚙ edit_file calc.py    ✔ edit calc.py
+⚙ run_bash python calc.py  ✔ exit 0
+● The bug in add() has been fixed to use addition.
+- done · 2563 in / 82 out tokens
+```
+
+Note the endpoint differs by transport: the Anthropic path wants the base **without** a version
+segment (the SDK appends `/v1/messages`), while the OpenAI path wants the full API root
+(`.../api/v1`), to which `/chat/completions` is appended.
+
 ## Signing in with a browser
 
 `Connect-Agent` runs an authorization-code flow with PKCE (RFC 7636) and a loopback redirect

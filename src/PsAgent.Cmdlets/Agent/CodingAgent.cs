@@ -1,14 +1,14 @@
 using System.Text;
 using System.Text.Json;
-using Anthropic;
 using Anthropic.Models.Messages;
+using PsAgent.Cmdlets.Agent.Models;
 
 namespace PsAgent.Cmdlets.Agent;
 
 /// <summary>Knobs for one <see cref="CodingAgent"/> session.</summary>
 public sealed class CodingAgentOptions
 {
-    /// <summary>Model id. Defaults to Claude Opus 5.</summary>
+    /// <summary>Model id.</summary>
     public string Model { get; set; } = "claude-opus-5";
 
     /// <summary>
@@ -17,7 +17,7 @@ public sealed class CodingAgentOptions
     /// </summary>
     public int MaxTokens { get; set; } = 16_000;
 
-    /// <summary>Reasoning effort. <c>high</c> is the API default; drop it for cheap mechanical work.</summary>
+    /// <summary>Reasoning effort, where the API has the concept. Anthropic only.</summary>
     public Effort Effort { get; set; } = Effort.High;
 
     /// <summary>
@@ -26,7 +26,7 @@ public sealed class CodingAgentOptions
     /// </summary>
     public int MaxTurns { get; set; } = 40;
 
-    /// <summary>Emit summarized reasoning as <see cref="AgentEventKind.Thought"/> rows.</summary>
+    /// <summary>Emit reasoning as <see cref="AgentEventKind.Thought"/> rows.</summary>
     public bool ShowThinking { get; set; } = true;
 
     /// <summary>Overrides the built-in system prompt when set.</summary>
@@ -39,31 +39,29 @@ public sealed class CodingAgentOptions
 /// capability comes from <see cref="AgentTools"/>, not from the orchestration.
 /// </summary>
 /// <remarks>
-/// <para>Deliberately the <b>manual</b> loop rather than the SDK's <c>BetaToolRunner</c>: the
-/// runner owns tool execution, and this agent needs to interleave an approval prompt and a
-/// transcript event around every single call. Owning the loop is what makes that possible.</para>
-/// <para>Non-streaming. Each turn is one <c>Messages.Create</c>, which keeps the reconstruction of
-/// the assistant echo (thinking signatures, tool_use inputs) exact — a streamed rebuild of those
-/// blocks is the one place this could silently corrupt a conversation. The UI shows a live
-/// status row instead, so a long turn does not read as a frozen terminal.</para>
+/// <para>The loop is written once and works against any API, because the wire format lives behind
+/// <see cref="IModelConversation"/>. Anthropic and any OpenAI-compatible endpoint therefore share
+/// the tool dispatch, the approval gate, the transcript and the viewer.</para>
+/// <para>Deliberately the <b>manual</b> loop rather than an SDK's tool runner: this agent needs to
+/// interleave an approval prompt and a transcript event around every single call, and observe each
+/// result as it happens so the UI can paint mid-turn.</para>
+/// <para>Non-streaming. Each turn is one request, which keeps the reconstruction of the assistant
+/// echo (thinking signatures, tool-call arguments) exact — a streamed rebuild of those is the one
+/// place this could silently corrupt a conversation.</para>
 /// </remarks>
 public sealed class CodingAgent
 {
-    private readonly AnthropicClient _client;
+    private readonly IModelConversation _conversation;
     private readonly AgentTools _tools;
     private readonly CodingAgentOptions _options;
-    private readonly List<MessageParam> _messages = [];
 
-    /// <summary>Create an agent over an existing client and tool executor.</summary>
-    public CodingAgent(AnthropicClient client, AgentTools tools, CodingAgentOptions options)
+    /// <summary>Create an agent over a conversation and a tool executor.</summary>
+    public CodingAgent(IModelConversation conversation, AgentTools tools, CodingAgentOptions options)
     {
-        _client = client;
+        _conversation = conversation;
         _tools = tools;
         _options = options;
     }
-
-    /// <summary>The running conversation. Survives across turns, which is what makes this a session.</summary>
-    public IReadOnlyList<MessageParam> History => _messages;
 
     /// <summary>Cumulative input tokens billed this session.</summary>
     public long InputTokens { get; private set; }
@@ -71,8 +69,8 @@ public sealed class CodingAgent
     /// <summary>Cumulative output tokens billed this session.</summary>
     public long OutputTokens { get; private set; }
 
-    /// <summary>The system prompt actually in use.</summary>
-    public string SystemPrompt => _options.SystemPrompt ?? DefaultSystemPrompt(_tools.Root);
+    /// <summary>Which transport is in use, for the transcript.</summary>
+    public string Transport => _conversation.Describe;
 
     /// <summary>
     /// Run one user turn to completion, calling <paramref name="emit"/> for every transcript row as
@@ -81,16 +79,16 @@ public sealed class CodingAgent
     public async Task RunTurnAsync(string userText, Action<AgentEvent> emit, CancellationToken ct = default)
     {
         emit(new AgentEvent { Kind = AgentEventKind.User, Title = userText, Body = userText });
-        _messages.Add(new MessageParam { Role = Role.User, Content = userText });
+        _conversation.AddUser(userText);
 
         for (var turn = 0; turn < _options.MaxTurns; turn++)
         {
             ct.ThrowIfCancellationRequested();
 
-            Message response;
+            ModelReply reply;
             try
             {
-                response = await _client.Messages.Create(BuildParams(), cancellationToken: ct).ConfigureAwait(false);
+                reply = await _conversation.SendAsync(ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -107,25 +105,44 @@ public sealed class CodingAgent
                 return;
             }
 
-            InputTokens += response.Usage.InputTokens;
-            OutputTokens += response.Usage.OutputTokens;
+            InputTokens += reply.InputTokens;
+            OutputTokens += reply.OutputTokens;
 
-            // A refusal is an HTTP 200 with no usable content — check before reading blocks.
-            if (response.StopReason == "refusal")
+            if (reply.Refused)
             {
                 emit(new AgentEvent
                 {
                     Kind = AgentEventKind.Error,
                     Title = "The model declined this request.",
-                    Body = "stop_reason = refusal",
+                    Body = "the API reported a refusal, so the response carried no usable content",
                 });
                 return;
             }
 
-            var (assistantBlocks, toolUses) = Project(response, emit);
-            _messages.Add(new MessageParam { Role = Role.Assistant, Content = assistantBlocks });
+            if (_options.ShowThinking)
+            {
+                foreach (var thought in reply.Thoughts)
+                {
+                    emit(new AgentEvent
+                    {
+                        Kind = AgentEventKind.Thought,
+                        Title = AgentEvent.Truncate(AgentEvent.Flatten(thought), 120),
+                        Body = thought,
+                    });
+                }
+            }
 
-            if (toolUses.Count == 0)
+            foreach (var text in reply.Texts)
+            {
+                emit(new AgentEvent
+                {
+                    Kind = AgentEventKind.Assistant,
+                    Title = AgentEvent.Truncate(AgentEvent.Flatten(text), 120),
+                    Body = text,
+                });
+            }
+
+            if (reply.ToolCalls.Count == 0)
             {
                 emit(new AgentEvent
                 {
@@ -135,33 +152,37 @@ public sealed class CodingAgent
                 return;
             }
 
-            // Every tool_use needs exactly one tool_result, and they must all travel in ONE user
-            // message — splitting them trains the model out of asking for parallel calls.
-            List<ContentBlockParam> results = [];
-            foreach (var use in toolUses)
+            List<ModelToolResult> results = [];
+            foreach (var call in reply.ToolCalls)
             {
                 ct.ThrowIfCancellationRequested();
-                var outcome = _tools.Execute(use.Name, use.Input);
+
+                emit(new AgentEvent
+                {
+                    Kind = AgentEventKind.ToolCall,
+                    Title = $"{call.Name} {DescribeInput(call.Input)}",
+                    Body = FormatInput(call.Input),
+                    ToolName = call.Name,
+                    ToolCallId = call.Id,
+                    Status = AgentToolStatus.InProgress,
+                });
+
+                var outcome = _tools.Execute(call.Name, call.Input);
 
                 emit(new AgentEvent
                 {
                     Kind = AgentEventKind.ToolResult,
                     Title = outcome.Summary,
                     Body = outcome.Text,
-                    ToolName = use.Name,
-                    ToolCallId = use.ID,
+                    ToolName = call.Name,
+                    ToolCallId = call.Id,
                     Status = outcome.Ok ? AgentToolStatus.Completed : AgentToolStatus.Failed,
                 });
 
-                results.Add(new ToolResultBlockParam
-                {
-                    ToolUseID = use.ID,
-                    Content = outcome.Text,
-                    IsError = !outcome.Ok,
-                });
+                results.Add(new ModelToolResult(call.Id, call.Name, outcome.Text, !outcome.Ok));
             }
 
-            _messages.Add(new MessageParam { Role = Role.User, Content = results });
+            _conversation.AddToolResults(results);
         }
 
         emit(new AgentEvent
@@ -171,114 +192,6 @@ public sealed class CodingAgent
             Body = "Raise -MaxTurns, or narrow the request.",
         });
     }
-
-    private MessageCreateParams BuildParams() => new()
-    {
-        Model = _options.Model,
-        MaxTokens = _options.MaxTokens,
-
-        // The system prompt and tool list are the stable prefix; the breakpoint goes at its end so
-        // the growing message history never invalidates it.
-        System = new List<TextBlockParam>
-        {
-            new() { Text = SystemPrompt, CacheControl = new CacheControlEphemeral() },
-        },
-        Thinking = new ThinkingConfigAdaptive { Display = Display.Summarized },
-        OutputConfig = new OutputConfig { Effort = _options.Effort },
-        Tools = [.. AgentTools.Catalog.Select(ToSdkTool)],
-        Messages = _messages,
-    };
-
-    /// <summary>
-    /// Turn one API response into (a) the assistant blocks to echo back and (b) the tool calls to
-    /// run, emitting a transcript row per block on the way.
-    /// </summary>
-    /// <remarks>
-    /// There is no <c>.ToParam()</c> in the C# SDK — each response block has to be rebuilt as its
-    /// <c>*Param</c> counterpart by hand. Thinking blocks must carry their <c>Signature</c>
-    /// verbatim; the API rejects a tampered one.
-    /// </remarks>
-    private (List<ContentBlockParam> Blocks, List<ToolUseBlock> ToolUses) Project(
-        Message response, Action<AgentEvent> emit)
-    {
-        List<ContentBlockParam> blocks = [];
-        List<ToolUseBlock> toolUses = [];
-
-        foreach (var block in response.Content)
-        {
-            if (block.TryPickText(out TextBlock? text))
-            {
-                blocks.Add(new TextBlockParam { Text = text.Text });
-                if (!string.IsNullOrWhiteSpace(text.Text))
-                {
-                    emit(new AgentEvent
-                    {
-                        Kind = AgentEventKind.Assistant,
-                        Title = AgentEvent.Truncate(AgentEvent.Flatten(text.Text), 120),
-                        Body = text.Text,
-                    });
-                }
-            }
-            else if (block.TryPickThinking(out ThinkingBlock? thinking))
-            {
-                blocks.Add(new ThinkingBlockParam
-                {
-                    Thinking = thinking.Thinking,
-                    Signature = thinking.Signature,
-                });
-
-                // With Display.Summarized the text is a readable summary; with the default it is
-                // empty, and an empty thought row is noise.
-                if (_options.ShowThinking && !string.IsNullOrWhiteSpace(thinking.Thinking))
-                {
-                    emit(new AgentEvent
-                    {
-                        Kind = AgentEventKind.Thought,
-                        Title = AgentEvent.Truncate(AgentEvent.Flatten(thinking.Thinking), 120),
-                        Body = thinking.Thinking,
-                    });
-                }
-            }
-            else if (block.TryPickRedactedThinking(out RedactedThinkingBlock? redacted))
-            {
-                blocks.Add(new RedactedThinkingBlockParam { Data = redacted.Data });
-            }
-            else if (block.TryPickToolUse(out ToolUseBlock? use))
-            {
-                blocks.Add(new ToolUseBlockParam
-                {
-                    ID = use.ID,
-                    Name = use.Name,
-                    Input = use.Input,
-                });
-                toolUses.Add(use);
-
-                emit(new AgentEvent
-                {
-                    Kind = AgentEventKind.ToolCall,
-                    Title = $"{use.Name} {DescribeInput(use.Input)}",
-                    Body = FormatInput(use.Input),
-                    ToolName = use.Name,
-                    ToolCallId = use.ID,
-                    Status = AgentToolStatus.InProgress,
-                });
-            }
-        }
-
-        return (blocks, toolUses);
-    }
-
-    /// <summary>Convert a transport-free <see cref="ToolSpec"/> into the SDK's tool shape.</summary>
-    internal static ToolUnion ToSdkTool(ToolSpec spec) => new Tool
-    {
-        Name = spec.Name,
-        Description = spec.Description,
-        InputSchema = new()
-        {
-            Properties = spec.Properties.ToDictionary(kv => kv.Key, kv => kv.Value),
-            Required = [.. spec.Required],
-        },
-    };
 
     /// <summary>A one-line rendering of a tool's arguments for the collapsed transcript row.</summary>
     internal static string DescribeInput(IReadOnlyDictionary<string, JsonElement> input)
@@ -307,6 +220,9 @@ public sealed class CodingAgent
 
         return sb.ToString();
     }
+
+    /// <summary>Convert a transport-free tool spec into the Anthropic SDK's shape.</summary>
+    internal static ToolUnion ToSdkTool(ToolSpec spec) => AnthropicConversation.ToSdkTool(spec);
 
     /// <summary>
     /// The built-in system prompt. Short on persona, specific about the two things the model

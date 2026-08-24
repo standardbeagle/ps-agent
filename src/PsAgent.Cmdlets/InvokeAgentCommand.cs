@@ -3,6 +3,7 @@ using System.Management.Automation;
 using Anthropic;
 using Anthropic.Models.Messages;
 using PsAgent.Cmdlets.Agent;
+using PsAgent.Cmdlets.Agent.Models;
 using PsAgent.Cmdlets.Agent.OAuth;
 using PsAgent.Cmdlets.Ui;
 
@@ -112,6 +113,15 @@ public sealed class InvokeAgentCommand : PSCmdlet
     [Alias("OAuthProfile")]
     public string? OAuthProvider { get; set; }
 
+    /// <summary>
+    /// Which wire format the endpoint speaks. <c>auto</c> picks <c>openai</c> whenever a browser
+    /// sign-in is in play, because Anthropic's OAuth is restricted to its own client and a bearer
+    /// token from anywhere else is going to an OpenAI-compatible service.
+    /// </summary>
+    [Parameter]
+    [ValidateSet("auto", "anthropic", "openai", IgnoreCase = true)]
+    public string Api { get; set; } = "auto";
+
     private readonly ConcurrentQueue<AgentEvent> _pending = new();
 
     /// <inheritdoc/>
@@ -207,7 +217,41 @@ public sealed class InvokeAgentCommand : PSCmdlet
             TimeSpan.FromSeconds(CommandTimeoutSeconds),
             maxOutputChars: 20_000);
 
-        var agent = new CodingAgent(client, tools, options);
+        var api = ChooseApi(Api, credential);
+        IModelConversation conversation;
+        if (api == "openai")
+        {
+            var apiEndpoint = credential.BaseUrl;
+            if (string.IsNullOrWhiteSpace(apiEndpoint))
+            {
+                ThrowTerminatingError(new ErrorRecord(
+                    new ArgumentException(
+                        "The openai transport needs an endpoint. Give -BaseUrl, or a baseUrl in the OAuth profile."),
+                    "NoBaseUrl", ErrorCategory.InvalidArgument, null));
+                return;
+            }
+
+            conversation = new OpenAiConversation(
+                OpenAiHttpClient(credential),
+                apiEndpoint!,
+                options.Model,
+                options.SystemPrompt ?? CodingAgent.DefaultSystemPrompt(root),
+                AgentTools.Catalog,
+                options.MaxTokens);
+        }
+        else
+        {
+            conversation = new AnthropicConversation(
+                client,
+                options.Model,
+                options.SystemPrompt ?? CodingAgent.DefaultSystemPrompt(root),
+                AgentTools.Catalog,
+                options.MaxTokens,
+                options.Effort);
+        }
+
+        var agent = new CodingAgent(conversation, tools, options);
+        authRow = authRow with { Title = authRow.Title + $" [{conversation.Describe}]" };
 
         if (!interactive)
         {
@@ -310,6 +354,39 @@ public sealed class InvokeAgentCommand : PSCmdlet
             : GetUnresolvedProviderPathFromPSPath(WorkspaceRoot);
 
         return Path.GetFullPath(raw);
+    }
+
+    /// <summary>
+    /// Decide the wire format. A browser sign-in implies OpenAI-compatible: Anthropic restricts its
+    /// OAuth to Claude Code, so a bearer token obtained by any other client belongs to a service
+    /// speaking the OpenAI shape.
+    /// </summary>
+    internal static string ChooseApi(string requested, AgentCredential credential)
+    {
+        if (!string.Equals(requested, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return requested.ToLowerInvariant();
+        }
+
+        return credential.Source == AgentCredentialSource.OAuth ? "openai" : "anthropic";
+    }
+
+    /// <summary>An HTTP client carrying the bearer token and whatever headers the provider needs.</summary>
+    private static HttpClient OpenAiHttpClient(AgentCredential credential)
+    {
+        var http = credential.ExtraHeaders.Count > 0
+            ? new HttpClient(new HeaderInjectingHandler(credential.ExtraHeaders))
+            : new HttpClient();
+
+        var token = credential.AuthToken ?? credential.ApiKey;
+        if (!string.IsNullOrEmpty(token))
+        {
+            http.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        }
+
+        http.Timeout = TimeSpan.FromMinutes(10);
+        return http;
     }
 
     /// <summary>Map the cmdlet's string level onto the SDK enum.</summary>
