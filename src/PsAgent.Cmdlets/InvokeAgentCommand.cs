@@ -217,7 +217,7 @@ public sealed class InvokeAgentCommand : PSCmdlet
             TimeSpan.FromSeconds(CommandTimeoutSeconds),
             maxOutputChars: 20_000);
 
-        var api = ChooseApi(Api, credential);
+        var api = ChooseApi(Api, credential, oauth?.Api);
         IModelConversation conversation;
         if (api == "openai")
         {
@@ -361,14 +361,21 @@ public sealed class InvokeAgentCommand : PSCmdlet
     /// OAuth to Claude Code, so a bearer token obtained by any other client belongs to a service
     /// speaking the OpenAI shape.
     /// </summary>
-    internal static string ChooseApi(string requested, AgentCredential credential)
+    internal static string ChooseApi(string requested, AgentCredential credential, string? profileApi = null)
     {
         if (!string.Equals(requested, "auto", StringComparison.OrdinalIgnoreCase))
         {
             return requested.ToLowerInvariant();
         }
 
-        return credential.Source == AgentCredentialSource.OAuth ? "openai" : "anthropic";
+        if (credential.Source != AgentCredentialSource.OAuth)
+        {
+            return "anthropic";
+        }
+
+        // The profile knows what its credential is good for; openai is the fallback because that
+        // is what a browser sign-in obtained by anything other than Claude Code can be spent on.
+        return string.IsNullOrWhiteSpace(profileApi) ? "openai" : profileApi.ToLowerInvariant();
     }
 
     /// <summary>An HTTP client carrying the bearer token and whatever headers the provider needs.</summary>

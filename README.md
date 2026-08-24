@@ -94,6 +94,18 @@ Invoke-Agent "fix the bug in calc.py" -Api openai `
   -BaseUrl 'https://openrouter.ai/api/v1' -Model 'openai/gpt-4o-mini'
 ```
 
+The one browser sign-in that needs no setup at all:
+
+```powershell
+Connect-Agent -Provider openrouter    # no client id, no app registration
+Invoke-Agent "fix the bug in calc.py" -Model 'openai/gpt-4o-mini'
+```
+
+OpenRouter's PKCE flow takes no `client_id`, so ps-agent ships it as a built-in profile. OpenAI's
+"Sign in with ChatGPT" is an interest-form programme, so that one needs a `client_id` they issue
+you; Anthropic's OAuth is Claude Code only. With a `client_id` from any provider, put it in a
+profile and the standard flow handles the rest.
+
 `Connect-Agent` signs in through the browser when you would rather not manage a key at all —
 an authorization-code flow with PKCE and a loopback redirect, run by ps-agent itself:
 

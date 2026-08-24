@@ -80,6 +80,7 @@ public static class OAuthCredentialProvider
             Requested: !string.IsNullOrWhiteSpace(requestedProfile),
             profile.BaseUrl,
             profile.ExtraHeaders,
-            tokens.ExpiresAt);
+            tokens.ExpiresAt,
+            profile.Api);
     }
 }

@@ -31,9 +31,23 @@ public sealed record OAuthCallback(string? Code, string? State, string? Error, s
 /// </remarks>
 public static class OAuthFlow
 {
+    /// <summary>The style that needs neither a client id nor an application registration.</summary>
+    public const string OpenRouterStyle = "openrouter";
+
     /// <summary>Build the authorize URL for a profile. Pure.</summary>
     public static string AuthorizeUrl(OAuthProfile profile, PkceChallenge pkce, string state, int port)
     {
+        if (string.Equals(profile.Style, OpenRouterStyle, StringComparison.OrdinalIgnoreCase))
+        {
+            // OpenRouter names the redirect `callback_url`, takes no client_id and no
+            // response_type, and carries no state parameter.
+            var or = HttpUtility.ParseQueryString(string.Empty);
+            or["callback_url"] = profile.RedirectUri(port);
+            or["code_challenge"] = pkce.Challenge;
+            or["code_challenge_method"] = PkceChallenge.Method;
+            return profile.AuthorizeUrl + (profile.AuthorizeUrl.Contains('?') ? "&" : "?") + or;
+        }
+
         var q = HttpUtility.ParseQueryString(string.Empty);
         q["response_type"] = "code";
         q["client_id"] = profile.ClientId;
@@ -77,7 +91,7 @@ public static class OAuthFlow
     /// A mismatched <c>state</c> means the redirect did not originate from the request this process
     /// made, so the code is not ours to redeem. Rejecting it is the whole point of the parameter.
     /// </remarks>
-    public static void EnsureValid(OAuthCallback callback, string expectedState)
+    public static void EnsureValid(OAuthCallback callback, string expectedState, bool checkState = true)
     {
         if (callback.Error is not null)
         {
@@ -90,7 +104,10 @@ public static class OAuthFlow
             throw new InvalidOperationException("authorization returned no code");
         }
 
-        if (!string.Equals(callback.State, expectedState, StringComparison.Ordinal))
+        // A provider that carries no state parameter cannot be checked for one. The loopback
+        // listener is still single-use and bound to this process, so the code has nowhere else to
+        // arrive; PKCE remains what stops a stolen code being redeemed.
+        if (checkState && !string.Equals(callback.State, expectedState, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "authorization state did not match the request; the redirect was not ours and the code was discarded");
@@ -117,6 +134,51 @@ public static class OAuthFlow
             ["client_id"] = profile.ClientId,
             ["refresh_token"] = refreshToken,
         };
+
+    /// <summary>
+    /// Redeem an OpenRouter authorization code. Its exchange is JSON (not form-encoded) and returns
+    /// <c>{ "key": ... }</c> — a user-controlled API key with no expiry and nothing to refresh.
+    /// </summary>
+    public static async Task<OAuthTokenSet> ExchangeOpenRouterAsync(
+        HttpClient http, OAuthProfile profile, string code, string verifier, CancellationToken ct = default)
+    {
+        var payload = new System.Text.Json.Nodes.JsonObject
+        {
+            ["code"] = code,
+            ["code_verifier"] = verifier,
+            ["code_challenge_method"] = PkceChallenge.Method,
+        };
+
+        using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+        using var response = await http.PostAsync(profile.TokenUrl, content, ct).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"key exchange returned {(int)response.StatusCode}: {Truncate(body, 400)}");
+        }
+
+        return ParseOpenRouterKey(body, profile.Name);
+    }
+
+    /// <summary>Parse an OpenRouter key exchange response. Pure, so the shape is testable.</summary>
+    public static OAuthTokenSet ParseOpenRouterKey(string body, string profileName)
+    {
+        var root = System.Text.Json.Nodes.JsonNode.Parse(body)?.AsObject()
+            ?? throw new InvalidOperationException("key exchange response was not a JSON object");
+
+        var key = root["key"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(key))
+        {
+            var error = root["error"]?.ToJsonString() ?? Truncate(body, 200);
+            throw new InvalidOperationException($"key exchange returned no key: {error}");
+        }
+
+        // No expiry and no refresh token: this is a durable key, so NeedsRefresh stays false and
+        // nothing ever tries to renew it.
+        return new OAuthTokenSet { AccessToken = key, RefreshToken = null, ExpiresAtUnix = 0, Profile = profileName };
+    }
 
     /// <summary>Post a form to the token endpoint and build a token set from the reply.</summary>
     public static async Task<OAuthTokenSet> PostTokenAsync(
@@ -178,8 +240,16 @@ public static class OAuthFlow
         var url = AuthorizeUrl(profile, pkce, state, listener.Port);
         openBrowser(url);
 
+        var isOpenRouter = string.Equals(profile.Style, OpenRouterStyle, StringComparison.OrdinalIgnoreCase);
+
         var callback = await listener.WaitForCallbackAsync(ct).ConfigureAwait(false);
-        EnsureValid(callback, state);
+        EnsureValid(callback, state, checkState: !isOpenRouter);
+
+        if (isOpenRouter)
+        {
+            return await ExchangeOpenRouterAsync(http, profile, callback.Code!, pkce.Verifier, ct)
+                .ConfigureAwait(false);
+        }
 
         return await PostTokenAsync(
             http,

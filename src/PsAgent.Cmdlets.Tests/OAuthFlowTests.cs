@@ -430,6 +430,94 @@ public sealed class OAuthFlowTests
         Assert.ThrowsAny<JsonException>(() => OAuthProfile.Parse("{ not json"));
     }
 
+    // ---------------------------------------------------------------- OpenRouter style
+
+    /// <summary>
+    /// The one browser sign-in a third party can complete today without being issued a client id:
+    /// no client_id, no response_type, and the redirect named callback_url.
+    /// </summary>
+    [Fact]
+    public void The_openrouter_authorize_url_carries_no_client_id()
+    {
+        var profile = OAuthProfile.BuiltIn["openrouter"];
+        var pkce = PkceChallenge.Create();
+
+        var url = OAuthFlow.AuthorizeUrl(profile, pkce, "unused-state", 8787);
+        var q = HttpUtility.ParseQueryString(new Uri(url).Query);
+
+        Assert.StartsWith("https://openrouter.ai/auth?", url, StringComparison.Ordinal);
+        Assert.Equal("http://localhost:8787/callback", q["callback_url"]);
+        Assert.Equal(pkce.Challenge, q["code_challenge"]);
+        Assert.Equal("S256", q["code_challenge_method"]);
+        Assert.Null(q["client_id"]);
+        Assert.Null(q["response_type"]);
+        Assert.Null(q["redirect_uri"]);
+    }
+
+    /// <summary>
+    /// OpenRouter echoes no state, so requiring one would reject every real callback. PKCE plus a
+    /// single-use loopback listener is what carries the security there.
+    /// </summary>
+    [Fact]
+    public void A_provider_without_state_is_not_failed_for_missing_it()
+    {
+        var callback = OAuthFlow.ParseCallback("?code=abc");
+
+        OAuthFlow.EnsureValid(callback, "whatever", checkState: false);
+
+        Assert.Throws<InvalidOperationException>(() => OAuthFlow.EnsureValid(callback, "whatever"));
+    }
+
+    [Fact]
+    public void A_missing_code_is_still_rejected_without_a_state_check()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            OAuthFlow.EnsureValid(OAuthFlow.ParseCallback("?nothing=here"), "s", checkState: false));
+    }
+
+    /// <summary>The exchange returns a durable API key, so there is nothing to refresh.</summary>
+    [Fact]
+    public void The_openrouter_exchange_yields_a_key_with_no_expiry()
+    {
+        var tokens = OAuthFlow.ParseOpenRouterKey(@"{""key"":""sk-or-v1-abc""}", "openrouter");
+
+        Assert.Equal("sk-or-v1-abc", tokens.AccessToken);
+        Assert.Null(tokens.RefreshToken);
+        Assert.Null(tokens.ExpiresAt);
+        Assert.False(tokens.NeedsRefresh(DateTimeOffset.UtcNow));
+    }
+
+    [Theory]
+    [InlineData(@"{""error"":""bad code""}")]
+    [InlineData("{}")]
+    public void A_key_exchange_without_a_key_is_a_clear_error(string body)
+    {
+        Assert.Throws<InvalidOperationException>(() => OAuthFlow.ParseOpenRouterKey(body, "openrouter"));
+    }
+
+    [Fact]
+    public void The_openrouter_profile_is_built_in_and_needs_no_file()
+    {
+        var profile = OAuthProfile.Load("openrouter");
+
+        Assert.NotNull(profile);
+        Assert.Equal("openrouter", profile!.Style);
+        Assert.Equal("openai", profile.Api);
+        Assert.Equal("https://openrouter.ai/api/v1", profile.BaseUrl);
+        Assert.Empty(profile.ClientId);
+        Assert.Contains("openrouter", OAuthProfile.ListNames());
+    }
+
+    [Fact]
+    public void A_profiles_api_choice_drives_the_transport()
+    {
+        var credential = new AgentCredential(AgentCredentialSource.OAuth, "signed in") { AuthToken = "t" };
+
+        Assert.Equal("anthropic", InvokeAgentCommand.ChooseApi("auto", credential, "anthropic"));
+        Assert.Equal("openai", InvokeAgentCommand.ChooseApi("auto", credential, "openai"));
+        Assert.Equal("openai", InvokeAgentCommand.ChooseApi("auto", credential, null));
+    }
+
     /// <summary>
     /// Token files share the profile directory, so a naive *.json listing invents a phantom
     /// profile per sign-in — `stub.token.json` reading as a provider named `stub.token`, which
@@ -451,7 +539,14 @@ public sealed class OAuthFlowTests
             File.WriteAllText(Path.Combine(profiles, "stub.json"), Profile.ToJson());
             File.WriteAllText(Path.Combine(profiles, "stub" + OAuthProfile.TokenSuffix), "{}");
 
-            Assert.Equal(["stub"], OAuthProfile.ListNames());
+            var names = OAuthProfile.ListNames();
+            Assert.Contains("stub", names);
+            Assert.DoesNotContain("stub.token", names);
+
+            // Built-ins are listed alongside files; nothing else should be.
+            Assert.Equal(
+                OAuthProfile.BuiltIn.Keys.Concat(["stub"]).Order(StringComparer.OrdinalIgnoreCase),
+                names.Order(StringComparer.OrdinalIgnoreCase));
         }
         finally
         {

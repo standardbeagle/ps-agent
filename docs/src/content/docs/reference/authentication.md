@@ -64,6 +64,34 @@ segment (the SDK appends `/v1/messages`), while the OpenAI path wants the full A
 
 ## Signing in with a browser
 
+```powershell
+Connect-Agent -Provider openrouter
+Invoke-Agent "fix the bug in calc.py" -Model 'openai/gpt-4o-mini'
+```
+
+That works with no setup and no application registration, which is worth explaining because it is
+not true of every provider.
+
+### Do you have to register ps-agent as an OAuth app?
+
+Depends who you are signing in to.
+
+**OpenRouter: no.** Its PKCE flow takes no `client_id` and needs no registered application. The
+browser goes to `https://openrouter.ai/auth` with a `callback_url` and a `code_challenge`, and the
+exchange at `POST /api/v1/auth/keys` returns a user-controlled API key. ps-agent ships this as a
+built-in profile, so `Connect-Agent -Provider openrouter` is the whole setup.
+
+**OpenAI: yes.** "Sign in with ChatGPT" is an interest-form programme rather than self-serve
+registration, so a third party needs OpenAI to issue a `client_id` before it can run the flow.
+Free, Plus and Pro accounts are eligible; Enterprise, Edu and Team are not. Until you have one,
+an API key is the route.
+
+**Anthropic: not available.** Its OAuth is restricted to Claude Code, which is why a browser
+sign-in points at an OpenAI-compatible endpoint rather than the Messages API.
+
+Once you have a `client_id` from any provider, put it in a profile and the standard flow handles
+the rest — nothing about that path is provider-specific.
+
 `Connect-Agent` runs an authorization-code flow with PKCE (RFC 7636) and a loopback redirect
 (RFC 8252): ps-agent starts a listener on `localhost`, opens the provider's consent page, and
 catches the redirect. The code never transits a clipboard, and no client secret ships with the

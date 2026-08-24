@@ -284,7 +284,8 @@ public sealed record ResolvedOAuth(
     bool Requested,
     string? BaseUrl = null,
     IReadOnlyDictionary<string, string>? ExtraHeaders = null,
-    DateTimeOffset? ExpiresAt = null)
+    DateTimeOffset? ExpiresAt = null,
+    string Api = "openai")
 {
     /// <summary>Headers to send, never null.</summary>
     public IReadOnlyDictionary<string, string> ExtraHeaders { get; init; } =

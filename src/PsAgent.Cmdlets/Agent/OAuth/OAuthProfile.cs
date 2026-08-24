@@ -22,6 +22,23 @@ public sealed record OAuthProfile
     [JsonPropertyName("name")]
     public required string Name { get; init; }
 
+    /// <summary>
+    /// Which dialect of the flow this provider speaks.
+    /// </summary>
+    /// <remarks>
+    /// <c>oauth2</c> is the RFC 6749 authorization-code flow. <c>openrouter</c> is OpenRouter's
+    /// variant: no client id at all, the redirect named <c>callback_url</c>, and an exchange that
+    /// returns a user-controlled API <c>key</c> rather than an expiring access token. The variant
+    /// exists because it is the one flow a third party can complete today without being issued an
+    /// identity first.
+    /// </remarks>
+    [JsonPropertyName("style")]
+    public string Style { get; init; } = "oauth2";
+
+    /// <summary>Which transport the resulting credential is good for: <c>openai</c> or <c>anthropic</c>.</summary>
+    [JsonPropertyName("api")]
+    public string Api { get; init; } = "openai";
+
     /// <summary>Where the browser is sent to obtain consent.</summary>
     [JsonPropertyName("authorizeUrl")]
     public required string AuthorizeUrl { get; init; }
@@ -30,9 +47,12 @@ public sealed record OAuthProfile
     [JsonPropertyName("tokenUrl")]
     public required string TokenUrl { get; init; }
 
-    /// <summary>The client identifier the provider issued for the application running this flow.</summary>
+    /// <summary>
+    /// The client identifier the provider issued for the application running this flow. Empty for
+    /// styles that do not use one.
+    /// </summary>
     [JsonPropertyName("clientId")]
-    public required string ClientId { get; init; }
+    public string ClientId { get; init; } = string.Empty;
 
     /// <summary>Scopes to request, space-joined into the authorize URL.</summary>
     [JsonPropertyName("scopes")]
@@ -70,6 +90,30 @@ public sealed record OAuthProfile
     /// <summary>The redirect URI, assembled from the port and path.</summary>
     public string RedirectUri(int actualPort) =>
         $"http://localhost:{actualPort}{(RedirectPath.StartsWith('/') ? RedirectPath : "/" + RedirectPath)}";
+
+    /// <summary>
+    /// Providers that need no setup at all, available to <c>-Provider</c> without a profile file.
+    /// </summary>
+    /// <remarks>
+    /// OpenRouter is here because its PKCE flow requires no client id and no application
+    /// registration: the exchange hands back a user-controlled API key. That makes it the one
+    /// browser sign-in ps-agent can offer out of the box.
+    /// </remarks>
+    public static IReadOnlyDictionary<string, OAuthProfile> BuiltIn { get; } =
+        new Dictionary<string, OAuthProfile>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["openrouter"] = new()
+            {
+                Name = "openrouter",
+                Style = "openrouter",
+                Api = "openai",
+                AuthorizeUrl = "https://openrouter.ai/auth",
+                TokenUrl = "https://openrouter.ai/api/v1/auth/keys",
+                BaseUrl = "https://openrouter.ai/api/v1",
+                RedirectPort = 8787,
+                RedirectPath = "/callback",
+            },
+        };
 
     /// <summary>A worked example, printed by <c>Connect-Agent -ShowExample</c>.</summary>
     public static string ExampleJson => """
@@ -111,18 +155,26 @@ public sealed record OAuthProfile
         return Path.Combine(baseDir, "ps-agent", "oauth");
     }
 
-    /// <summary>Load a named profile, or null when there is none.</summary>
+    /// <summary>
+    /// Load a named profile: a file on disk first, then a built-in. A file wins so a built-in can
+    /// be overridden without renaming it.
+    /// </summary>
     public static OAuthProfile? Load(string name)
     {
         var path = Path.Combine(ProfileDirectory(), name + ".json");
         try
         {
-            return File.Exists(path) ? Parse(File.ReadAllText(path)) : null;
+            if (File.Exists(path))
+            {
+                return Parse(File.ReadAllText(path));
+            }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return null;
+            // Fall through to the built-ins.
         }
+
+        return BuiltIn.GetValueOrDefault(name);
     }
 
     /// <summary>The suffix of a token file, which shares the profile directory.</summary>
@@ -146,8 +198,10 @@ public sealed record OAuthProfile
                         .Where(f => !f.EndsWith(TokenSuffix, StringComparison.OrdinalIgnoreCase))
                         .Select(Path.GetFileNameWithoutExtension)
                         .OfType<string>()
+                        .Concat(BuiltIn.Keys)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
                         .Order(StringComparer.OrdinalIgnoreCase)]
-                : [];
+                : [.. BuiltIn.Keys.Order(StringComparer.OrdinalIgnoreCase)];
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
