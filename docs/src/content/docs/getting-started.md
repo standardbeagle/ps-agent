@@ -6,7 +6,7 @@ description: Clone the three sibling repos, pack the Strata feed, build, and run
 You end up with the `PsAgent` module imported and a live agent in your terminal:
 
 ```powershell
-Import-Module ./src/PsAgent.Cmdlets/bin/Release/net10.0/PsAgent.psd1
+Import-Module PsAgent
 Invoke-Acp "Read hello.txt and tell me the magic word." -Agent opencode -NoUi -AutoApprove
 ```
 
@@ -52,7 +52,7 @@ documented root cause of ps-bash's test-suite flakiness.
 ## 4. Import and run
 
 ```powershell
-Import-Module ./src/PsAgent.Cmdlets/bin/Release/net10.0/PsAgent.psd1
+Import-Module PsAgent
 
 # Needs Anthropic credentials — see Authentication.
 Invoke-Agent "why does the parser drop trailing newlines?"

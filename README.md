@@ -60,11 +60,28 @@ cd ../ps-agent && dotnet build -c Release -m:1
 The build auto-detects the feed and the Strata version, so a strata bump needs no edit here. A
 missing feed fails with that instruction rather than a wall of `CS0246`.
 
-Then import the built module:
+Then put it on `PSModulePath` so it loads by name:
 
 ```powershell
-Import-Module ./src/PsAgent.Cmdlets/bin/Release/net10.0/PsAgent.psd1
+./scripts/install-local.ps1                     # -Configuration Release, -AddToProfile, -Uninstall
+Import-Module PsAgent
 ```
+
+The installer links rather than copies, so a rebuild is picked up without reinstalling, and it
+picks the target framework matching your host — PowerShell 7.4 is .NET 8, 7.6 is .NET 10. Linking
+the wrong one imports fine and then fails on first use with a type-load error that never mentions
+the framework. It verifies the import in a clean session before reporting success.
+
+`-AddToProfile` adds `Import-Module PsAgent` to your profile so every new session has it.
+
+To skip the installer, import the manifest by path:
+
+```powershell
+Import-Module ./src/PsAgent.Cmdlets/bin/Debug/net10.0/PsAgent.psd1
+```
+
+Either way you get four cmdlets — `Invoke-Agent`, `Invoke-Acp`, `Connect-Agent`,
+`Disconnect-Agent` — and the aliases `agent`, `pia`, `acp`.
 
 `Invoke-Agent` resolves a credential in a fixed order and says which step won as the first
 transcript row. `-ApiKey`, then `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, then a gateway key
