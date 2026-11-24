@@ -47,11 +47,19 @@ $moduleName = 'PsAgent'
 $userModules = Join-Path (Split-Path -Parent $PROFILE) 'Modules'
 $link = Join-Path $userModules $moduleName
 
+# Remove the junction itself, never its contents: Remove-Item -Recurse on a junction has
+# historically followed it and deleted the build output on the other side.
+# OneDrive marks synced folders ReadOnly, and RemoveDirectory refuses a read-only directory with
+# "access denied" — so clear the attribute on the link (not the target) first.
+function Remove-Link([string] $path) {
+    $item = Get-Item -LiteralPath $path -Force
+    $item.Attributes = $item.Attributes -band -bnot [System.IO.FileAttributes]::ReadOnly
+    [System.IO.Directory]::Delete($path, $false)
+}
+
 if ($Uninstall) {
     if (Test-Path $link) {
-        # Remove the junction itself, never its contents: Remove-Item -Recurse on a junction has
-        # historically followed it and deleted the build output on the other side.
-        [System.IO.Directory]::Delete($link, $false)
+        Remove-Link $link
         Write-Host "Removed $link"
     }
     else {
@@ -95,7 +103,7 @@ Build it first:
 New-Item -ItemType Directory -Force -Path $userModules | Out-Null
 
 if (Test-Path $link) {
-    [System.IO.Directory]::Delete($link, $false)
+    Remove-Link $link
 }
 
 New-Item -ItemType Junction -Path $link -Target $source | Out-Null
